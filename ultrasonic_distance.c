@@ -10,6 +10,7 @@
 #define NANOS_PER_SEC 1000000000
 #define POLL_INTERVAL_US 1000
 #define ECHO_TIMEOUT_US 500000
+#define SPEED_SOUND_MM_NS_HALF 0.0001715
 #ifdef CLOCK_MONOTONIC_RAW
 #define CLOCK CLOCK_MONOTONIC
 #endif
@@ -156,7 +157,7 @@ static int wait_for_edge(int pin, unsigned int edge, int timeout_us, struct time
 	return 0;
 }
 
-int distance(float *dist)
+int distance_mm(float *dist)
 {
 	int ret = pulse(GPIO_TRIGGER, PULSE_DURATION_US);
 	if (ret != 0) {
@@ -170,10 +171,10 @@ int distance(float *dist)
 	}
 
 	// time difference between start and arrival, in nanoseconds
-	double elapsed_ns = elapsed.tv_sec * NANOS_PER_SEC + elapsed.tv_nsec;
+	int elapsed_ns = elapsed.tv_sec * NANOS_PER_SEC + elapsed.tv_nsec;
 	// multiply by the speed of sound (0.000343 metres/nanosecond)
 	// and divide by 2, because there and back
-	*dist = elapsed_ns * 0.0001715;
+	*dist = elapsed_ns * SPEED_SOUND_MM_NS_HALF;
 
 	return 0;
 }
@@ -200,12 +201,12 @@ int main(int argc, char **argv)
 
 	for(;;) {
 		float dist;
-		ret = distance(&dist);
+		ret = distance_mm(&dist);
 		if (ret != 0) {
 			fputs("Cannot obtain distance\n", stderr);
 			return EXIT_FAILURE;
 		}
-		fprintf(stderr, "Measured Distance = %.1f cm\n", dist);
+		fprintf(stderr, "Measured Distance = %.1f mm\n", dist);
 		sleep(1);
 	}
 
