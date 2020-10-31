@@ -69,40 +69,6 @@ static int sleep_for(const struct timespec *ts)
 	return ret;
 }
 
-#define USE_GPIOTRIGGER
-
-#ifdef USE_GPIOTRIGGER
-
-static int pulse(int pin, int duration_us) {
-	return gpioTrigger(pin, duration_us, 1);
-}
-
-#else /* ndef USE_GPIOTRIGGER */
-
-static int pulse(int pin, int duration_us) {
-	struct timespec pulse_duration = { .tv_sec = 0, .tv_nsec = duration_us * 1000 };
-
-	// set pin high
-	int ret = gpioWrite(pin, 1);
-	if (ret != 0) {
-		return ret;
-	}
-
-	ret = sleep_for(&pulse_duration);
-	if (ret != 0) {
-		return ret;
-	}
-
-	// set pin low again
-	ret = gpioWrite(pin, 0);
-	if (ret != 0) {
-		return ret;
-	}
-
-	return ret;
-}
-#endif /* ndef USE_GPIOTRIGGER */
-
 struct isr_args {
 	int fired;
 	int level;
@@ -159,7 +125,7 @@ static int wait_for_edge(int pin, unsigned int edge, int timeout_us, struct time
 
 int distance_mm(float *dist)
 {
-	int ret = pulse(GPIO_TRIGGER, PULSE_DURATION_US);
+	int ret = gpioTrigger(GPIO_TRIGGER, PULSE_DURATION_US, 1);
 	if (ret != 0) {
 		return ret;
 	}
