@@ -21,6 +21,7 @@ static int setup(int in_pin, int out_pin)
 	if (ret != 0) {
 		return ret;
 	}
+
 	ret = gpioSetMode(out_pin, PI_OUTPUT);
 	if (ret != 0) {
 		return ret;
@@ -28,6 +29,16 @@ static int setup(int in_pin, int out_pin)
 
 	return ret;
 }
+
+#define USE_GPIOTRIGGER
+
+#ifdef USE_GPIOTRIGGER
+
+static int pulse(int pin, int duration_us) {
+	return gpioTrigger(pin, duration_us, 1);
+}
+
+#else /* ndef USE_GPIOTRIGGER */
 
 static void normalise_tv(struct timespec *ts)
 {
@@ -65,34 +76,33 @@ static int sleep_for(const struct timespec *ts)
 	return ret;
 }
 
-static int pulse(int duration_us) {
-	// TODO: Use gpioTrigger
-	int ret;
+static int pulse(int pin, int duration_us) {
 	struct timespec pulse_duration = { .tv_sec = 0, .tv_nsec = duration_us * 1000 };
 
-	// set Trigger to HIGH
-	ret = gpioWrite(GPIO_TRIGGER, 1);
+	// set pin high
+	int ret = gpioWrite(pin, 1);
 	if (ret != 0) {
 		return ret;
 	}
 
-	// set Trigger after 0.01ms to LOW
 	ret = sleep_for(&pulse_duration);
 	if (ret != 0) {
 		return ret;
 	}
 
-	ret = gpioWrite(GPIO_TRIGGER, 0);
+	// set pin low again
+	ret = gpioWrite(pin, 0);
 	if (ret != 0) {
 		return ret;
 	}
 
 	return ret;
 }
+#endif /* ndef USE_GPIOTRIGGER */
 
 int distance(float *dist)
 {
-	int ret = pulse(PULSE_DURATION_US);
+	int ret = pulse(GPIO_TRIGGER, PULSE_DURATION_US);
 	if (ret != 0) {
 		return ret;
 	}
