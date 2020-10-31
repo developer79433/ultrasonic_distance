@@ -8,6 +8,8 @@
 #define GPIO_ECHO 24
 #define PULSE_DURATION_US 10
 #define NANOS_PER_SEC 1000000000
+#define POLL_INTERVAL_US 1000
+#define ECHO_TIMEOUT_US 500000
 #ifdef CLOCK_MONOTONIC_RAW
 #define CLOCK CLOCK_MONOTONIC
 #endif
@@ -30,17 +32,7 @@ static int setup(int in_pin, int out_pin)
 	return ret;
 }
 
-#define USE_GPIOTRIGGER
-
-#ifdef USE_GPIOTRIGGER
-
-static int pulse(int pin, int duration_us) {
-	return gpioTrigger(pin, duration_us, 1);
-}
-
-#else /* ndef USE_GPIOTRIGGER */
-
-static void normalise_tv(struct timespec *ts)
+static void normalise_timespec(struct timespec *ts)
 {
 	if (ts->tv_nsec >= NANOS_PER_SEC) {
 		ts->tv_sec += ts->tv_nsec / NANOS_PER_SEC;
@@ -58,7 +50,7 @@ static int sleep_for(const struct timespec *ts)
 
 	until.tv_sec += ts->tv_sec;
 	until.tv_nsec += ts->tv_nsec;
-	normalise_tv(&until);
+	normalise_timespec(&until);
 
 	for (;;) {
 		ret = clock_nanosleep(CLOCK, TIMER_ABSTIME, &until, 0);
@@ -75,6 +67,16 @@ static int sleep_for(const struct timespec *ts)
 
 	return ret;
 }
+
+#define USE_GPIOTRIGGER
+
+#ifdef USE_GPIOTRIGGER
+
+static int pulse(int pin, int duration_us) {
+	return gpioTrigger(pin, duration_us, 1);
+}
+
+#else /* ndef USE_GPIOTRIGGER */
 
 static int pulse(int pin, int duration_us) {
 	struct timespec pulse_duration = { .tv_sec = 0, .tv_nsec = duration_us * 1000 };
@@ -100,6 +102,60 @@ static int pulse(int pin, int duration_us) {
 }
 #endif /* ndef USE_GPIOTRIGGER */
 
+struct isr_args {
+	int fired;
+	int level;
+	uint32_t ticks;
+};
+
+static void on_edge(int pin, int level, uint32_t tick, void *userdata)
+{
+	struct isr_args *args = (struct isr_args *) userdata;
+	args->fired = 1;
+	args->level = level;
+	args->ticks = tick;
+}
+
+static int wait_for_edge(int pin, unsigned int edge, int timeout_us, struct timespec *elapsed)
+{
+	struct isr_args args = { .fired = 0 };
+	uint32_t start_ticks = gpioTick();
+	struct timespec poll_interval = { .tv_sec = 0, .tv_nsec = POLL_INTERVAL_US * 1000 };
+
+	normalise_timespec(&poll_interval);
+
+	int ret = gpioSetISRFuncEx(pin, edge, timeout_us / 1000, on_edge, &args);
+	if (ret != 0) {
+		return ret;
+	}
+
+	for (;;) {
+
+		ret = sleep_for(&poll_interval);
+		if (ret < 0) {
+			return ret;
+		}
+
+		if (args.fired) {
+			break;
+		}
+
+	}
+
+	if (PI_TIMEOUT != args.level) {
+		elapsed->tv_sec = 0;
+		elapsed->tv_nsec = (args.ticks - start_ticks) * 1000;
+		normalise_timespec(elapsed);
+	}
+
+	ret = gpioSetISRFuncEx(pin, edge, 0, NULL, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	return 0;
+}
+
 int distance(float *dist)
 {
 	int ret = pulse(GPIO_TRIGGER, PULSE_DURATION_US);
@@ -107,47 +163,17 @@ int distance(float *dist)
 		return ret;
 	}
 
-	// TODO: Use gpioSetAlertFunc or gpioSetISRFunc
-	// The below is a polling loop, pegging a core. This is naive.
-	// An interrupt may be more power-efficient while still yielding
-	// adequate performance.
-
-	struct timespec start_time, stop_time;
-	// save StartTime
-	for(;;) {
-		int ret = gpioRead(GPIO_ECHO);
-		if (PI_BAD_GPIO == ret) {
-			return ret;
-		}
-		if (0 != ret) {
-			ret = clock_gettime(CLOCK, &start_time);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-	}
-
-	// save time of arrival
-	for(;;) {
-		int ret = gpioRead(GPIO_ECHO);
-		if (PI_BAD_GPIO == ret) {
-			return ret;
-		}
-		if (1 != ret) {
-			ret = clock_gettime(CLOCK, &stop_time);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
+	struct timespec elapsed;
+	ret = wait_for_edge(GPIO_ECHO, FALLING_EDGE, ECHO_TIMEOUT_US, &elapsed);
+	if (ret != 0) {
+		return ret;
 	}
 
 	// time difference between start and arrival, in nanoseconds
-	double elapsed = (stop_time.tv_sec - start_time.tv_sec) * NANOS_PER_SEC + (stop_time.tv_nsec - start_time.tv_nsec);
+	double elapsed_ns = elapsed.tv_sec * NANOS_PER_SEC + elapsed.tv_nsec;
 	// multiply by the speed of sound (0.000343 metres/nanosecond)
 	// and divide by 2, because there and back
-	*dist = elapsed * 0.0001715;
+	*dist = elapsed_ns * 0.0001715;
 
 	return 0;
 }
